@@ -1,42 +1,93 @@
-# Retrieve arguments
-domain=$1
-path=$2
-wiki_name=$3
-language=$4
-is_public=$5
+#!/bin/bash
 
+set -eu
 
-# Check domain/path availability
-sudo yunohost app checkurl $domain$path -a mediawiki
-if [[ ! $? -eq 0 ]]; then
-    exit 1
+#=================================================
+# GENERIC STARTING
+#=================================================
+# IMPORT GENERIC HELPERS
+#=================================================
+
+source _common.sh
+source /usr/share/yunohost/helpers
+
+#=================================================
+# MANAGE FAILURE OF THE SCRIPT
+#=================================================
+
+ynh_clean_setup () {
+# Nettoyage des résidus d'installation non pris en charge par le script remove.
+	if test -n "$PID_TAIL"
+	then
+		SUPPRESS_WARNING kill -s 15 $PID_TAIL	# Arrête l'exécution de tail.
+		ynh_secure_remove "$tempfile"
+	fi
+	echo ""
+}
+ynh_abort_if_errors	# Active trap pour arrêter le script si une erreur est détectée.
+
+#=================================================
+# RETRIEVE ARGUMENTS FROM THE MANIFEST
+#=================================================
+
+domain=$YNH_APP_ARG_DOMAIN
+is_public=$YNH_APP_ARG_IS_PUBLIC
+path_url=$YNH_APP_ARG_PATH
+language=$YNH_APP_ARG_LANGUAGE
+wiki_name=$YNH_APP_ARG_WIKI_NAME
+
+#=================================================
+# CHECK IF THE APP CAN BE INSTALLED WITH THIS ARGS
+#=================================================
+
+path_url=$(ynh_normalize_url_path $path_url)	# Vérifie et corrige la syntaxe du path.
+CHECK_DOMAINPATH	# Vérifie la disponibilité du path et du domaine.
+CHECK_FINALPATH	# Vérifie que le dossier de destination n'est pas déjà utilisé.
+
+if [ "$path_url" == "/" ] && [ $multisite -eq 1 ]; then
+	ynh_die "Multisite option of wordpress doesn't work at root of domain."
 fi
 
+#=================================================
 # Generate random DES key & password
-deskey=$(dd if=/dev/urandom bs=1 count=200 2> /dev/null | tr -c -d '[A-Za-z0-9]' | sed -n 's/\(.\{24\}\).*/\1/p')
-db_pwd=$(dd if=/dev/urandom bs=1 count=200 2> /dev/null | tr -c -d '[A-Za-z0-9]' | sed -n 's/\(.\{24\}\).*/\1/p')
+#=================================================
 
-# Use 'mediawiki' as database name and user
-db_user=mediawiki
+deskey=$(ynh_string_random)
 
+#=================================================
+# CREATE A SQL BDD
+#=================================================
+
+db_name=$(ynh_sanitize_dbid $app)
+ynh_app_setting_set $app db_name $db_name
+ynh_mysql_setup_db $db_name $db_name
+
+#=================================================
 # Instal php5-cli dependency
+#=================================================
+
 sudo apt-get update
 sudo apt-get install php5-cli -y
 
-# Initialize database and store mysql password for upgrade
-sudo yunohost app initdb $db_user -p $db_pwd -s $(readlink -e ../conf/SQL/mysql.initial.sql)
-sudo yunohost app setting mediawiki mysqlpwd -v $db_pwd
-
+#=================================================
 # Copy files to the right place
+#=================================================
+
 final_path=/var/www/mediawiki
 sudo mkdir -p $final_path
 sudo cp -r ../sources/mediawiki/* $final_path
 sudo cp ../conf/LocalSettings.php $final_path/
 
+#=================================================
 # LDAP Extension
+#=================================================
+
 sudo cp -r ../sources/LdapAuthentication $final_path/extensions/
 
+#=================================================
 # RemoteUser Extension
+#=================================================
+
 sudo wget https://codeload.github.com/wikimedia/mediawiki-extensions-Auth_remoteuser/legacy.tar.gz/REL1_22
 sudo tar -xzf REL1_22
 sudo mkdir $final_path/extensions/Auth_remoteuser
@@ -44,7 +95,10 @@ sudo mv wikimedia-mediawiki-extensions-Auth_remoteuser*/* $final_path/extensions
 sudo rm -R wikimedia-mediawiki-extensions-Auth_remoteuser*
 sudo rm REL1_22
 
+#=================================================
 # Change variables in Mediawiki configuration
+#=================================================
+
 pathForWiki=$path
 if [ "$pathForWiki" = "/" ]; then
     pathForWiki=""
@@ -58,13 +112,22 @@ sudo sed -i "s/ynh_wiki_db_user/$db_user/g" $final_path/LocalSettings.php
 sudo sed -i "s/ynh_wiki_db_password/$db_pwd/g" $final_path/LocalSettings.php
 sudo sed -i "s/ynh_wiki_language/$language/g" $final_path/LocalSettings.php
 
+#=================================================
 # Update DB
+#=================================================
+
 sudo php5 $final_path/maintenance/update.php
 
+#=================================================
 # Set permissions to roundcube directory
+#=================================================
+
 sudo chown -R www-data: $final_path
 
+#=================================================
 # Modify Nginx configuration file and copy it to Nginx conf directory
+#=================================================
+
 sed -i "s@PATHTOCHANGE@$path@g" ../conf/nginx.conf
 sed -i "s@ALIASTOCHANGE@$final_path/@g" ../conf/nginx.conf
 sudo cp ../conf/nginx.conf /etc/nginx/conf.d/$domain.d/mediawiki.conf
@@ -76,16 +139,9 @@ sudo cp ../conf/nginx.conf /etc/nginx/conf.d/$domain.d/mediawiki.conf
 #  sudo yunohost app setting mediawiki skipped_uris -v "/"
 #fi
 
+#=================================================
 # Reload Nginx and regenerate SSOwat conf
+#=================================================
+
 sudo service nginx reload
 sudo yunohost app ssowatconf
-
-# Add admin account
-# Step 1 : get a token
-#gettoken=$(curl -c tmpcookie -kL -X POST https://$domain$path/api.php --data "format=json&action=createaccount&name=monAdmin&password=123456&reason=InstallMediawiki")
-#echo $gettoken
-#token=$(echo $gettoken | grep -Po '(?<="token":")[^"]*')
-#echo $token
-## Step 2 : create the account
-#echo "format=json&token=$token&action=createaccount&name=monAdmin&reason=InstallMediawiki"
-#curl -b tmpcookie -kL -X POST https://$domain$path/api.php --data "format=json&token=$token&action=createaccount&name=monAdmin&password=123456&reason=InstallMediawiki"
