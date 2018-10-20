@@ -1,0 +1,6 @@
+SOURCE_URL=https://releases.wikimedia.org/mediawiki/1.31/mediawiki-1.31.1.tar.gz
+SOURCE_SUM=ce5ad8a07c8ef6832448629d8bb56a19b2f73632ddde29b5af2c08192943a48f
+SOURCE_SUM_PRG=sha256sum
+SOURCE_FORMAT=tar.gz
+SOURCE_IN_SUBDIR=true
+SOURCE_FILENAME=
